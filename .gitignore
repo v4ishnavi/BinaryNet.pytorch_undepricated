@@ -1,0 +1,11 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Model checkpoints
+*.pth.tar
+
+# Results or logs (optional)
+results/*.csv
+results/*.html
+results/*.log

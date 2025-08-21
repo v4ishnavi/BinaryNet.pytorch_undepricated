@@ -3,51 +3,56 @@ import pdb
 import torch.nn as nn
 import math
 from torch.autograd import Variable
-from torch.autograd import Function
+from torch.autograd.function  import Function, InplaceFunction
 
 import numpy as np
 
 
 
 
-class Binarize(Function):
+class Binarize(InplaceFunction):
 
-    @staticmethod
-    def forward(ctx, input, quant_mode='det', allow_scale=False):
-        output = input.clone()      
+    def forward(ctx,input,quant_mode='det',allow_scale=False,inplace=False):
+        ctx.inplace = inplace
+        if ctx.inplace:
+            ctx.mark_dirty(input)
+            output = input
+        else:
+            output = input.clone()      
 
-        scale = output.abs().max() if allow_scale else 1 # this is the scaling factor
+        scale= output.abs().max() if allow_scale else 1
 
         if quant_mode=='det':
-            return output.div(scale).sign().mul(scale) # deterministic binarization
+            return output.div(scale).sign().mul(scale)
         else:
             return output.div(scale).add_(1).div_(2).add_(torch.rand(output.size()).add(-0.5)).clamp_(0,1).round().mul_(2).add_(-1).mul(scale)
-        # stochastic binarization
         
-    @staticmethod
-    def backward(ctx, grad_output):
-        #STE (Straight Through Estimator)
-        grad_input = grad_output
-        return grad_input, None, None
+    def backward(ctx,grad_output):
+        #STE 
+        grad_input=grad_output
+        return grad_input,None,None,None
 
 
-class Quantize(Function):
-    @staticmethod
-    def forward(ctx, input, quant_mode='det', numBits=4):
-        output = input.clone()
-        scale = (2**numBits-1)/(output.max()-output.min())
-        output = output.mul(scale).clamp(-2**(numBits-1)+1, 2**(numBits-1))
-        if quant_mode=='det':
-            output = output.round().div(scale)
+class Quantize(InplaceFunction):
+    def forward(ctx,input,quant_mode='det',numBits=4,inplace=False):
+        ctx.inplace = inplace
+        if ctx.inplace:
+            ctx.mark_dirty(input)
+            output = input
         else:
-            output = output.round().add(torch.rand(output.size()).add(-0.5)).div(scale)
+            output = input.clone()
+        scale=(2**numBits-1)/(output.max()-output.min())
+        output = output.mul(scale).clamp(-2**(numBits-1)+1,2**(numBits-1))
+        if quant_mode=='det':
+            output=output.round().div(scale)
+        else:
+            output=output.round().add(torch.rand(output.size()).add(-0.5)).div(scale)
         return output
     
-    @staticmethod
-    def backward(ctx, grad_output):
-        #STE (Straight Through Estimator)
-        grad_input = grad_output
-        return grad_input, None, None
+    def backward(grad_output):
+        #STE 
+        grad_input=grad_output
+        return grad_input,None,None
 
 def binarized(input,quant_mode='det'):
       return Binarize.apply(input,quant_mode)  
@@ -70,26 +75,25 @@ class HingeLoss(nn.Module):
         return self.hinge_loss(input,target)
 
 class SqrtHingeLossFunction(Function):
-    @staticmethod
-    def forward(ctx, input, target):
-        margin = 1.0
-        output = margin - input.mul(target)
-        output[output.le(0)] = 0
-        ctx.save_for_backward(input, target)
-        loss = output.mul(output).sum(0).sum(1).div(target.numel())
+    def __init__(self):
+        super(SqrtHingeLossFunction,self).__init__()
+        self.margin=1.0
+
+    def forward(self, input, target):
+        output=self.margin-input.mul(target)
+        output[output.le(0)]=0
+        self.save_for_backward(input, target)
+        loss=output.mul(output).sum(0).sum(1).div(target.numel())
         return loss
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, target = ctx.saved_tensors
-        margin = 1.0
-        output = margin - input.mul(target)
-        output[output.le(0)] = 0
-        grad_input = target.mul(-2).mul(output)
-        grad_input.mul_(output.ne(0).float())
-        grad_input.div_(input.numel())
-        grad_input = grad_input * grad_output
-        return grad_input, None
+    def backward(self,grad_output):
+       input, target = self.saved_tensors
+       output=self.margin-input.mul(target)
+       output[output.le(0)]=0
+       grad_output.resize_as_(input).copy_(target).mul_(-2).mul_(output)
+       grad_output.mul_(output.ne(0).float())
+       grad_output.div_(input.numel())
+       return grad_output,grad_output
 
 
 
@@ -101,10 +105,7 @@ class BinarizeLinear(nn.Linear):
     def forward(self, input):
 
         if input.size(1) != 784:
-            # print("Input size not 784. binarize.")
             input_b=binarized(input)
-        else: 
-            input_b=input # if input is already binarized
         weight_b=binarized(self.weight)
         out = nn.functional.linear(input_b,weight_b)
         if not self.bias is None:

@@ -6,7 +6,8 @@ import pandas as pd
 from bokeh.io import output_file, save, show
 from bokeh.plotting import figure
 from bokeh.layouts import column
-#from bokeh.charts import Line, defaults
+from bokeh.models import HoverTool
+#from bokeh.charts import Line, defaults  # Deprecated - removed
 #
 #defaults.width = 800
 #defaults.height = 400
@@ -41,7 +42,7 @@ class ResultsLog(object):
         if self.results is None:
             self.results = df
         else:
-            self.results = self.results.append(df, ignore_index=True)
+            self.results = pd.concat([self.results, df], ignore_index=True)
 
     def save(self, title='Training Results'):
         if len(self.figures) > 0:
@@ -56,7 +57,7 @@ class ResultsLog(object):
     def load(self, path=None):
         path = path or self.path
         if os.path.isfile(path):
-            self.results.read_csv(path)
+            self.results = pd.read_csv(path)
 
     def show(self):
         if len(self.figures) > 0:
@@ -66,6 +67,34 @@ class ResultsLog(object):
     #def plot(self, *kargs, **kwargs):
     #    line = Line(data=self.results, *kargs, **kwargs)
     #    self.figures.append(line)
+
+    def plot_line(self, x_col=None, y_col=None, title="Training Progress", width=800, height=400, x=None, y=None, **kwargs):
+        """Modern replacement for deprecated Line chart"""
+        # Handle backward compatibility with x/y keyword arguments
+        if x is not None:
+            x_col = x
+        if y is not None:
+            y_col = y
+            
+        if x_col is None or y_col is None:
+            raise ValueError("Must provide x_col and y_col (or x and y) arguments")
+            
+        if self.results is not None and x_col in self.results.columns and y_col in self.results.columns:
+            p = figure(title=title, width=width, height=height,
+                      tools='pan,box_zoom,wheel_zoom,box_select,reset,save')
+            
+            # Add line and circle plots
+            line = p.line(self.results[x_col], self.results[y_col], line_width=2, alpha=0.8)
+            circles = p.circle(self.results[x_col], self.results[y_col], size=6, alpha=0.6)
+            
+            # Add hover tool with tooltips
+            hover = HoverTool(tooltips=[(x_col, f'@{{{x_col}}}'), (y_col, f'@{{{y_col}}}')])
+            p.add_tools(hover)
+            
+            p.xaxis.axis_label = x_col
+            p.yaxis.axis_label = y_col
+            
+            self.figures.append(p)
 
     def image(self, *kargs, **kwargs):
         fig = figure()

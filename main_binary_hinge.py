@@ -24,7 +24,7 @@ model_names = sorted(name for name in models.__dict__
 
 parser = argparse.ArgumentParser(description='PyTorch ConvNet Training')
 
-parser.add_argument('--results_dir', metavar='RESULTS_DIR', default='/media/hdd/ihubara/BinaryNet.pytorch/results',
+parser.add_argument('--results_dir', metavar='RESULTS_DIR', default='./results',
                     help='results dir')
 parser.add_argument('--save', metavar='SAVE', default='',
                     help='saved folder')
@@ -80,7 +80,7 @@ def main():
     #torch.save(args.batch_size/(len(args.gpus)/2+1),'multi_gpu_batch_size')
     if args.evaluate:
         args.results_dir = '/tmp'
-    if args.save is '':
+    if args.save == '':
         args.save = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     save_path = os.path.join(args.results_dir, args.save)
     if not os.path.exists(save_path):
@@ -107,7 +107,7 @@ def main():
 
     model_config = {'input_size': args.input_size, 'dataset': args.dataset, 'num_classes': output_dim}
 
-    if args.model_config is not '':
+    if args.model_config != '':
         model_config = dict(model_config, **literal_eval(args.model_config))
     model = model(**model_config)
     logging.info("created model with configuration: %s", model_config)
@@ -215,18 +215,17 @@ def main():
         results.add(epoch=epoch + 1, train_loss=train_loss, val_loss=val_loss,
                     train_error1=100 - train_prec1, val_error1=100 - val_prec1,
                     train_error5=100 - train_prec5, val_error5=100 - val_prec5)
-        results.plot(x='epoch', y=['train_loss', 'val_loss'],
-                     title='Loss', ylabel='loss')
-        results.plot(x='epoch', y=['train_error1', 'val_error1'],
-                     title='Error@1', ylabel='error %')
-        results.plot(x='epoch', y=['train_error5', 'val_error5'],
-                     title='Error@5', ylabel='error %')
+        results.plot_line(x='epoch', y='train_loss', title='Training Loss')
+        results.plot_line(x='epoch', y='val_loss', title='Validation Loss')
+        results.plot_line(x='epoch', y='train_error1', title='Training Error@1')
+        results.plot_line(x='epoch', y='val_error1', title='Validation Error@1')
         results.save()
 
 def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=None):
     if args.gpus and len(args.gpus) > 1:
-        model = torch.nn.DataParallel(model, args.gpus)
-    batch_time = AverageMeter()
+        model = torch.nn.DataParallel(model, args.gpus) 
+        # DataParallel: it splits the input across the GPUs and gathers the output
+    batch_time = AverageMeter() # stores the average 
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
