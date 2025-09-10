@@ -16,6 +16,9 @@ from utils import *
 from datetime import datetime
 from ast import literal_eval
 from torchvision.utils import save_image
+import numpy as np
+import wandb
+import psutil
 
 
 model_names = sorted(name for name in models.__dict__
@@ -65,12 +68,29 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', type=str, metavar='FILE',
                     help='evaluate model FILE on validation set')
+parser.add_argument('--wandb-project', default='BNN-runs',
+                    help='wandb project name')
+parser.add_argument('--wandb-run-name', default=None,
+                    help='wandb run name (if None, auto-generated)')
+parser.add_argument('--no-wandb', action='store_true',
+                    help='disable wandb logging')
+parser.add_argument('--full-precision-first', action='store_true',
+                    help='use full precision for first conv layer in binary models')
 
 
 def main():
     global args, best_prec1
     best_prec1 = 0
     args = parser.parse_args()
+
+    # Initialize wandb
+    if not args.no_wandb:
+        run_name = args.wandb_run_name or f"{args.model}_{args.dataset}_d{getattr(args, 'depth', 'NA')}_{datetime.now().strftime('%m%d_%H%M')}"
+        wandb.init(
+            project=args.wandb_project,
+            name=run_name,
+            config=vars(args)
+        )
 
     if args.evaluate:
         args.results_dir = '/tmp'
@@ -98,12 +118,19 @@ def main():
     logging.info("creating model %s", args.model)
     model = models.__dict__[args.model]
     model_config = {'input_size': args.input_size, 'dataset': args.dataset}
+    
+    # Add full_precision_first flag for binary models
+    if 'binary' in args.model:
+        model_config['full_precision_first'] = args.full_precision_first
 
     if args.model_config is not '':
         model_config = dict(model_config, **literal_eval(args.model_config))
 
     model = model(**model_config)
     logging.info("created model with configuration: %s", model_config)
+    
+    # Analyze model memory and parameters
+    total_params, model_size_mb = analyze_model_memory(model, args.model)
 
     # optionally resume from a checkpoint
     if args.evaluate:
@@ -207,6 +234,24 @@ def main():
         results.add(epoch=epoch + 1, train_loss=train_loss, val_loss=val_loss,
                     train_error1=100 - train_prec1, val_error1=100 - val_prec1,
                     train_error5=100 - train_prec5, val_error5=100 - val_prec5)
+        
+        # Log to wandb
+        if not args.no_wandb:
+            wandb.log({
+                "epoch": epoch + 1,
+                "train/loss": train_loss,
+                "train/accuracy_top1": train_prec1,
+                "train/accuracy_top5": train_prec5,
+                "train/error_top1": 100 - train_prec1,
+                "train/error_top5": 100 - train_prec5,
+                "val/loss": val_loss,
+                "val/accuracy_top1": val_prec1,
+                "val/accuracy_top5": val_prec5,
+                "val/error_top1": 100 - val_prec1,
+                "val/error_top5": 100 - val_prec5,
+                "val/best_prec1": best_prec1
+            })
+        
         #results.plot(x='epoch', y=['train_loss', 'val_loss'],
         #             title='Loss', ylabel='loss')
         #results.plot(x='epoch', y=['train_error1', 'val_error1'],
@@ -214,6 +259,10 @@ def main():
         #results.plot(x='epoch', y=['train_error5', 'val_error5'],
         #             title='Error@5', ylabel='error %')
         results.save()
+    
+    # Finish wandb run
+    if not args.no_wandb:
+        wandb.finish()
 
 
 def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=None):
@@ -224,6 +273,10 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
+    
+    # Timing measurements
+    forward_times = []
+    backward_times = []
 
     end = time.time()
     for i, (inputs, target) in enumerate(data_loader):
@@ -236,14 +289,27 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
             with torch.no_grad():
                 input_var = Variable(inputs.type(args.type), volatile=not training)
                 target_var = Variable(target)
-                # compute output
+                
+                # Time forward pass
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                forward_start = time.time()
                 output = model(input_var)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                forward_times.append((time.time() - forward_start) * 1000)  # ms
         else:
             input_var = Variable(inputs.type(args.type), volatile=not training)
             target_var = Variable(target)
-            # compute output
+            
+            # Time forward pass
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            forward_start = time.time()
             output = model(input_var)
-
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            forward_times.append((time.time() - forward_start) * 1000)  # ms
 
         loss = criterion(output, target_var)
         if type(output) is list:
@@ -256,10 +322,18 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
         top5.update(prec5.item(), inputs.size(0))
 
         if training:
-            # compute gradient and do SGD step
+            # Time backward pass
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            backward_start = time.time()
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            backward_times.append((time.time() - backward_start) * 1000)  # ms
 
 
         # measure elapsed time
@@ -277,6 +351,30 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
                              phase='TRAINING' if training else 'EVALUATING',
                              batch_time=batch_time,
                              data_time=data_time, loss=losses, top1=top1, top5=top5))
+
+    # Report timing statistics
+    if forward_times:
+        avg_forward = np.mean(forward_times)
+        logging.info(f'Average Forward Time: {avg_forward:.2f}ms per batch')
+        
+        if not args.no_wandb:
+            phase_name = "train" if training else "val"
+            wandb.log({
+                f"timing/{phase_name}_forward_ms": avg_forward,
+                f"timing/{phase_name}_batch_time_ms": batch_time.avg * 1000,
+                f"timing/{phase_name}_data_loading_ms": data_time.avg * 1000
+            })
+        
+    if backward_times and training:
+        avg_backward = np.mean(backward_times)
+        logging.info(f'Average Backward Time: {avg_backward:.2f}ms per batch')
+        logging.info(f'Average Total Time: {avg_forward + avg_backward:.2f}ms per batch')
+        
+        if not args.no_wandb:
+            wandb.log({
+                "timing/train_backward_ms": avg_backward,
+                "timing/train_total_ms": avg_forward + avg_backward
+            })
 
     return losses.avg, top1.avg, top5.avg
 

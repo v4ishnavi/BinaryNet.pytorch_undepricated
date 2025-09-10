@@ -16,13 +16,12 @@ class Binarize(Function):
     def forward(ctx, input, quant_mode='det', allow_scale=False):
         output = input.clone()      
 
-        scale = output.abs().max() if allow_scale else 1 # this is the scaling factor
+        scale = output.abs().max() if allow_scale else 1
 
         if quant_mode=='det':
-            return output.div(scale).sign().mul(scale) # deterministic binarization
+            return output.div(scale).sign().mul(scale)
         else:
             return output.div(scale).add_(1).div_(2).add_(torch.rand(output.size()).add(-0.5)).clamp_(0,1).round().mul_(2).add_(-1).mul(scale)
-        # stochastic binarization
         
     @staticmethod
     def backward(ctx, grad_output):
@@ -101,10 +100,7 @@ class BinarizeLinear(nn.Linear):
     def forward(self, input):
 
         if input.size(1) != 784:
-            # print("Input size not 784. binarize.")
             input_b=binarized(input)
-        else: 
-            input_b=input # if input is already binarized
         weight_b=binarized(self.weight)
         out = nn.functional.linear(input_b,weight_b)
         if not self.bias is None:

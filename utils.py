@@ -7,6 +7,7 @@ from bokeh.io import output_file, save, show
 from bokeh.plotting import figure
 from bokeh.layouts import column
 from bokeh.models import HoverTool
+import psutil
 #from bokeh.charts import Line, defaults  # Deprecated - removed
 #
 #defaults.width = 800
@@ -187,3 +188,32 @@ def accuracy(output, target, topk=(1,)):
     # kernel_img.add_(-kernel_img.min())
     # kernel_img.mul_(255 / kernel_img.max())
     # save_image(kernel_img, 'kernel%s.jpg' % epoch)
+
+
+def analyze_model_memory(model, model_name="Model"):
+    """Analyze model parameters, memory usage and save model size"""
+    total_params = sum(p.numel() for p in model.parameters())
+    
+    # Calculate model size by saving temporarily
+    temp_path = f'temp_{model_name.lower()}.pth'
+    torch.save(model.state_dict(), temp_path)
+    model_size_mb = os.path.getsize(temp_path) / 1024 / 1024
+    os.remove(temp_path)
+    
+    # Get memory usage
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gpu_memory_mb = torch.cuda.memory_allocated() / 1024 / 1024
+        memory_info = f"GPU Memory: {gpu_memory_mb:.1f}MB"
+    else:
+        cpu_memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
+        memory_info = f"CPU Memory: {cpu_memory_mb:.1f}MB"
+    
+    logging.info(f"\n=== {model_name} ANALYSIS ===")
+    logging.info(f"Parameters: {total_params:,}")
+    logging.info(f"Model Size: {model_size_mb:.1f}MB")
+    logging.info(f"{memory_info}")
+    logging.info("=" * 30)
+    
+    return total_params, model_size_mb
+

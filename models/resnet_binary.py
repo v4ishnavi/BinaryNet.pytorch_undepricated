@@ -17,9 +17,13 @@ def conv3x3(in_planes, out_planes, stride=1):
 
 def init_model(model):
     for m in model.modules():
-        if isinstance(m, BinarizeConv2d):
+        if isinstance(m, (BinarizeConv2d, nn.Conv2d)):
             n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
             m.weight.data.normal_(0, math.sqrt(2. / n))
+        elif isinstance(m, (BinarizeLinear, nn.Linear)): ### NEW CODE 
+            nn.init.xavier_normal_(m.weight)
+            if m.bias is not None:
+                m.bias.data.zero_()
         elif isinstance(m, nn.BatchNorm2d):
             m.weight.data.fill_(1)
             m.bias.data.zero_()
@@ -51,16 +55,13 @@ class BasicBlock(nn.Module):
         out = self.tanh1(out)
 
         out = self.conv2(out)
-
+        out = self.bn2(out)
 
         if self.downsample is not None:
-            if residual.data.max()>1:
-                import pdb; pdb.set_trace()
             residual = self.downsample(residual)
 
         out += residual
         if self.do_bntan:
-            out = self.bn2(out)
             out = self.tanh2(out)
 
         return out
@@ -84,7 +85,6 @@ class Bottleneck(nn.Module):
 
     def forward(self, x):
         residual = x
-        import pdb; pdb.set_trace()
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.tanh(out)
@@ -100,9 +100,7 @@ class Bottleneck(nn.Module):
             residual = self.downsample(x)
 
         out += residual
-        if self.do_bntan:
-            out = self.bn2(out)
-            out = self.tanh2(out)
+        out = self.tanh(out)
 
         return out
 
@@ -181,26 +179,29 @@ class ResNet_imagenet(ResNet):
 class ResNet_cifar10(ResNet):
 
     def __init__(self, num_classes=10,
-                 block=BasicBlock, depth=18):
+                 block=BasicBlock, depth=18, full_precision_first=False):
         super(ResNet_cifar10, self).__init__()
-        self.inflate = 5
-        self.inplanes = 16*self.inflate
+        self.inplanes = 16
         n = int((depth - 2) / 6)
-        self.conv1 = BinarizeConv2d(3, 16*self.inflate, kernel_size=3, stride=1, padding=1,
-                               bias=False)
+        
+        # Use full precision or binarized first layer based on flag
+        if full_precision_first:
+            self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        else:
+            self.conv1 = BinarizeConv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
         self.maxpool = lambda x: x
-        self.bn1 = nn.BatchNorm2d(16*self.inflate)
+        self.bn1 = nn.BatchNorm2d(16)
         self.tanh1 = nn.Hardtanh(inplace=True)
         self.tanh2 = nn.Hardtanh(inplace=True)
-        self.layer1 = self._make_layer(block, 16*self.inflate, n)
-        self.layer2 = self._make_layer(block, 32*self.inflate, n, stride=2)
-        self.layer3 = self._make_layer(block, 64*self.inflate, n, stride=2,do_bntan=False)
+        self.layer1 = self._make_layer(block, 16, n)
+        self.layer2 = self._make_layer(block, 32, n, stride=2)
+        self.layer3 = self._make_layer(block, 64, n, stride=2,do_bntan=False)
         self.layer4 = lambda x: x
         self.avgpool = nn.AvgPool2d(8)
-        self.bn2 = nn.BatchNorm1d(64*self.inflate)
+        self.bn2 = nn.BatchNorm1d(64)
         self.bn3 = nn.BatchNorm1d(10)
         self.logsoftmax = nn.LogSoftmax()
-        self.fc = BinarizeLinear(64*self.inflate, num_classes)
+        self.fc = BinarizeLinear(64, num_classes)
 
         init_model(self)
         #self.regime = {
@@ -210,18 +211,18 @@ class ResNet_cifar10(ResNet):
         #    122: {'lr': 1e-5, 'weight_decay': 0},
         #    164: {'lr': 1e-6}
         #}
+        # Improved regime for ~50 epochs - more conservative
         self.regime = {
-            0: {'optimizer': 'Adam', 'lr': 5e-3},
-            101: {'lr': 1e-3},
-            142: {'lr': 5e-4},
-            184: {'lr': 1e-4},
-            220: {'lr': 1e-5}
+            0: {'optimizer': 'Adam', 'lr': 1e-3, 'weight_decay': 1e-5},
+            15: {'lr': 5e-4},
+            30: {'lr': 1e-4},
+            40: {'lr': 5e-5}
         }
 
 
 def resnet_binary(**kwargs):
-    num_classes, depth, dataset = map(
-        kwargs.get, ['num_classes', 'depth', 'dataset'])
+    num_classes, depth, dataset, full_precision_first = map(
+        kwargs.get, ['num_classes', 'depth', 'dataset', 'full_precision_first'])
     if dataset == 'imagenet':
         num_classes = num_classes or 1000
         depth = depth or 50
@@ -244,5 +245,7 @@ def resnet_binary(**kwargs):
     elif dataset == 'cifar10':
         num_classes = num_classes or 10
         depth = depth or 18
+        full_precision_first = full_precision_first or False
         return ResNet_cifar10(num_classes=num_classes,
-                              block=BasicBlock, depth=depth)
+                              block=BasicBlock, depth=depth, 
+                              full_precision_first=full_precision_first)
