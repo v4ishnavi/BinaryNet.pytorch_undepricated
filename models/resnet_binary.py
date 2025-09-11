@@ -181,7 +181,7 @@ class ResNet_cifar10(ResNet):
     def __init__(self, num_classes=10,
                  block=BasicBlock, depth=18, full_precision_first=False, full_precision_last=False):
         super(ResNet_cifar10, self).__init__()
-        self.inflate = 5
+        self.inflate = 1
         self.inplanes = 16* self.inflate
         n = int((depth - 2) / 6)
         
@@ -210,20 +210,27 @@ class ResNet_cifar10(ResNet):
             self.fc = BinarizeLinear(64*self.inflate, num_classes)
 
         init_model(self)
-        #self.regime = {
+        # self.regime = {
         #    0: {'optimizer': 'SGD', 'lr': 1e-1,
         #        'weight_decay': 1e-4, 'momentum': 0.9},
         #    81: {'lr': 1e-4},
         #    122: {'lr': 1e-5, 'weight_decay': 0},
         #    164: {'lr': 1e-6}
-        #}
-        # Improved regime for ~50 epochs - more conservative
+        # }
         self.regime = {
-            0: {'optimizer': 'Adam', 'lr': 1e-3, 'weight_decay': 1e-5},
-            15: {'lr': 5e-4},
-            30: {'lr': 1e-4},
-            40: {'lr': 5e-5}
+            0: {'optimizer': 'Adam', 'lr': 0.005},
+            101: {'lr': 0.001},
+            142: {'lr': 0.0005},
+            184: {'lr': 0.0001},
+            220: {'lr': 1e-05}
         }
+        # Improved regime for ~50 epochs - more conservative
+        # self.regime = {
+        #     0: {'optimizer': 'Adam', 'lr': 1e-3, 'weight_decay': 1e-5},
+        #     15: {'lr': 5e-4},
+        #     30: {'lr': 1e-4},
+        #     40: {'lr': 5e-5}
+        # }
 
 
 def resnet_binary(**kwargs):
