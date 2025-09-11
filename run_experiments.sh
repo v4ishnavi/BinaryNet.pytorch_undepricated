@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Usage examples:
+# ./run_experiments.sh                                    # All binary (default)
+# ./run_experiments.sh "MyProject"                        # Custom project name
+# ./run_experiments.sh "MyProject" true                   # Full precision first layer
+# ./run_experiments.sh "MyProject" false true             # Full precision last layer  
+# ./run_experiments.sh "MyProject" true true              # Full precision first + last layers
+
 # Activate conda environment
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate precog
@@ -10,14 +17,29 @@ EPOCHS=50
 BATCH_SIZE=512
 WANDB_PROJECT=${1:-"BNN-Experiments"}
 USE_FULL_PRECISION_FIRST=${2:-"false"}  # Second argument to enable full precision first layer
+USE_FULL_PRECISION_LAST=${3:-"false"}   # Third argument to enable full precision last layer
+
+# Build precision flags and experiment suffix
+FULL_PRECISION_FLAGS=""
+EXPERIMENT_SUFFIX=""
 
 if [ "$USE_FULL_PRECISION_FIRST" = "true" ]; then
-    FULL_PRECISION_FLAG="--full-precision-first"
-    EXPERIMENT_SUFFIX="_fp_first"
+    FULL_PRECISION_FLAGS="$FULL_PRECISION_FLAGS --full-precision-first"
+    EXPERIMENT_SUFFIX="${EXPERIMENT_SUFFIX}_fp_first"
+fi
+
+if [ "$USE_FULL_PRECISION_LAST" = "true" ]; then
+    FULL_PRECISION_FLAGS="$FULL_PRECISION_FLAGS --full-precision-last"
+    EXPERIMENT_SUFFIX="${EXPERIMENT_SUFFIX}_fp_last"
+fi
+
+if [ "$USE_FULL_PRECISION_FIRST" = "true" ] && [ "$USE_FULL_PRECISION_LAST" = "true" ]; then
+    echo "=== BNN Experiments with Full Precision First+Last Layers ($DATASET, $EPOCHS epochs) ==="
+elif [ "$USE_FULL_PRECISION_FIRST" = "true" ]; then
     echo "=== BNN Experiments with Full Precision First Layer ($DATASET, $EPOCHS epochs) ==="
+elif [ "$USE_FULL_PRECISION_LAST" = "true" ]; then
+    echo "=== BNN Experiments with Full Precision Last Layer ($DATASET, $EPOCHS epochs) ==="
 else
-    FULL_PRECISION_FLAG=""
-    EXPERIMENT_SUFFIX=""
     echo "=== BNN Experiments with All Binary ($DATASET, $EPOCHS epochs) ==="
 fi
 
@@ -29,12 +51,12 @@ python main_binary.py --model resnet --dataset $DATASET --epochs $EPOCHS --batch
 # 2. Binary ResNet + CrossEntropy  
 BINARY_CE_NAME="binary_resnet_ce${EXPERIMENT_SUFFIX}_${DATASET}_e${EPOCHS}_bs${BATCH_SIZE}"
 echo "2/4: Binary ResNet CrossEntropy ($EPOCHS epochs)..."
-python main_binary.py --model resnet_binary --dataset $DATASET --epochs $EPOCHS --batch-size $BATCH_SIZE $FULL_PRECISION_FLAG --wandb-project "$WANDB_PROJECT" --wandb-run-name "$BINARY_CE_NAME" --results_dir "./results" --save "$BINARY_CE_NAME" --print-freq 100
+python main_binary.py --model resnet_binary --dataset $DATASET --epochs $EPOCHS --batch-size $BATCH_SIZE $FULL_PRECISION_FLAGS --wandb-project "$WANDB_PROJECT" --wandb-run-name "$BINARY_CE_NAME" --results_dir "./results" --save "$BINARY_CE_NAME" --print-freq 100
 
 # 3. Binary ResNet + Hinge Loss
 BINARY_HINGE_NAME="binary_resnet_hinge${EXPERIMENT_SUFFIX}_${DATASET}_e${EPOCHS}_bs${BATCH_SIZE}"
 echo "3/4: Binary ResNet Hinge ($EPOCHS epochs)..."
-python main_binary_hinge.py --model resnet_binary --dataset $DATASET --epochs $EPOCHS --batch-size $BATCH_SIZE $FULL_PRECISION_FLAG --wandb-project "$WANDB_PROJECT" --wandb-run-name "$BINARY_HINGE_NAME" --results_dir "./results" --save "$BINARY_HINGE_NAME" --print-freq 100
+python main_binary_hinge.py --model resnet_binary --dataset $DATASET --epochs $EPOCHS --batch-size $BATCH_SIZE $FULL_PRECISION_FLAGS --wandb-project "$WANDB_PROJECT" --wandb-run-name "$BINARY_HINGE_NAME" --results_dir "./results" --save "$BINARY_HINGE_NAME" --print-freq 100
 
 # 4. Binary ResNet + CrossEntropy + Full Precision First (if not already done)
 if [ "$USE_FULL_PRECISION_FIRST" = "false" ]; then

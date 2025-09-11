@@ -76,6 +76,8 @@ parser.add_argument('--no-wandb', action='store_true',
                     help='disable wandb logging')
 parser.add_argument('--full-precision-first', action='store_true',
                     help='use full precision for first conv layer in binary models')
+parser.add_argument('--full-precision-last', action='store_true',
+                    help='use full precision for last linear layer in binary models')
 
 torch.cuda.random.manual_seed_all(10)
 
@@ -128,9 +130,10 @@ def main():
 
     model_config = {'input_size': args.input_size, 'dataset': args.dataset, 'num_classes': output_dim}
     
-    # Add full_precision_first flag for binary models
+    # Add full_precision_first and full_precision_last flags for binary models
     if 'binary' in args.model:
         model_config['full_precision_first'] = args.full_precision_first
+        model_config['full_precision_last'] = args.full_precision_last
 
     if args.model_config != '':
         model_config = dict(model_config, **literal_eval(args.model_config))
@@ -207,6 +210,9 @@ def main():
     #import pdb; pdb.set_trace()
     #search_binarized_modules(model)
 
+    # Start overall training timer
+    training_start_time = time.time()
+
     for epoch in range(args.start_epoch, args.epochs):
         optimizer = adjust_optimizer(optimizer, epoch, regime)
 
@@ -267,6 +273,21 @@ def main():
         results.plot_line(x='epoch', y='val_error1', title='Validation Error@1')
         results.save()
     
+    # Log total training time
+    total_training_time = time.time() - training_start_time
+    hours = int(total_training_time // 3600)
+    minutes = int((total_training_time % 3600) // 60)
+    seconds = int(total_training_time % 60)
+    
+    logging.info(f'Total training time: {hours:02d}h {minutes:02d}m {seconds:02d}s')
+    
+    if not args.no_wandb:
+        wandb.log({
+            "training/total_time_hours": total_training_time / 3600,
+            "training/total_time_minutes": total_training_time / 60,
+            "training/total_time_seconds": total_training_time
+        })
+    
     # Finish wandb run
     if not args.no_wandb:
         wandb.finish()
@@ -281,10 +302,6 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
     top1 = AverageMeter()
     top5 = AverageMeter()
     
-    # Timing measurements
-    forward_times = []
-    backward_times = []
-
     end = time.time()
     for i, (inputs, target) in enumerate(data_loader):
         # measure data loading time
@@ -302,27 +319,11 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
             with torch.no_grad():
                 input_var = Variable(inputs.type(args.type))
                 target_var = Variable(target_onehot)
-
-                # Time forward pass
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                forward_start = time.time()
                 output = model(input_var)
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                forward_times.append((time.time() - forward_start) * 1000)  # ms
         else:
                 input_var = Variable(inputs.type(args.type))
                 target_var = Variable(target_onehot)
-
-                # Time forward pass
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                forward_start = time.time()
                 output = model(input_var)
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                forward_times.append((time.time() - forward_start) * 1000)  # ms
 
         #import pdb; pdb.set_trace()
         loss = criterion(output, target_onehot)
@@ -339,11 +340,6 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
         #if not training and top1.avg<15:
         #    import pdb; pdb.set_trace()
         if training:
-            # Time backward pass
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            backward_start = time.time()
-            
             # compute gradient and do SGD step
             optimizer.zero_grad()
             #add backwoed hook
@@ -366,10 +362,6 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
                     p.org.copy_(p.data.clamp_(-1,1))
                     #if epoch>30:
                     #    import pdb; pdb.set_trace()
-            
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            backward_times.append((time.time() - backward_start) * 1000)  # ms
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -387,29 +379,7 @@ def forward(data_loader, model, criterion, epoch=0, training=True, optimizer=Non
                              batch_time=batch_time,
                              data_time=data_time, loss=losses, top1=top1, top5=top5))
 
-    # Report timing statistics
-    if forward_times:
-        avg_forward = np.mean(forward_times)
-        logging.info(f'Average Forward Time: {avg_forward:.2f}ms per batch')
-        
-        if not args.no_wandb:
-            phase_name = "train" if training else "val"
-            wandb.log({
-                f"timing/{phase_name}_forward_ms": avg_forward,
-                f"timing/{phase_name}_batch_time_ms": batch_time.avg * 1000,
-                f"timing/{phase_name}_data_loading_ms": data_time.avg * 1000
-            })
-        
-    if backward_times and training:
-        avg_backward = np.mean(backward_times)
-        logging.info(f'Average Backward Time: {avg_backward:.2f}ms per batch')
-        logging.info(f'Average Total Time: {avg_forward + avg_backward:.2f}ms per batch')
-        
-        if not args.no_wandb:
-            wandb.log({
-                "timing/train_backward_ms": avg_backward,
-                "timing/train_total_ms": avg_forward + avg_backward
-            })
+
 
     return losses.avg, top1.avg, top5.avg
 
