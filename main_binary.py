@@ -78,6 +78,7 @@ parser.add_argument('--full-precision-first', action='store_true',
                     help='use full precision for first conv layer in binary models')
 parser.add_argument('--full-precision-last', action='store_true',
                     help='use full precision for last linear layer in binary models')
+parser.add_argument('--inflate', type=int, default=1)
 
 
 def main():
@@ -87,7 +88,7 @@ def main():
 
     # Initialize wandb
     if not args.no_wandb:
-        run_name = args.wandb_run_name or f"{args.model}_{args.dataset}_d{getattr(args, 'depth', 'NA')}_{datetime.now().strftime('%m%d_%H%M')}"
+        run_name = args.wandb_run_name or f"{args.model}_{args.dataset}_d{getattr(args, 'depth', 'NA')}_in{args.inflate}_{datetime.now().strftime('%m%d_%H%M')}"
         wandb.init(
             project=args.wandb_project,
             name=run_name,
@@ -125,6 +126,7 @@ def main():
     if 'binary' in args.model:
         model_config['full_precision_first'] = args.full_precision_first
         model_config['full_precision_last'] = args.full_precision_last
+        model_config['inflate'] = args.inflate
 
     if args.model_config is not '':
         model_config = dict(model_config, **literal_eval(args.model_config))

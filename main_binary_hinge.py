@@ -78,7 +78,7 @@ parser.add_argument('--full-precision-first', action='store_true',
                     help='use full precision for first conv layer in binary models')
 parser.add_argument('--full-precision-last', action='store_true',
                     help='use full precision for last linear layer in binary models')
-
+parser.add_argument('--inflate', type=int, default=1)
 torch.cuda.random.manual_seed_all(10)
 
 output_dim = 0
@@ -134,6 +134,7 @@ def main():
     if 'binary' in args.model:
         model_config['full_precision_first'] = args.full_precision_first
         model_config['full_precision_last'] = args.full_precision_last
+        model_config['inflate'] = args.inflate
 
     if args.model_config != '':
         model_config = dict(model_config, **literal_eval(args.model_config))

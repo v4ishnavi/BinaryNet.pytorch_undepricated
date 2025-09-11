@@ -179,9 +179,10 @@ class ResNet_imagenet(ResNet):
 class ResNet_cifar10(ResNet):
 
     def __init__(self, num_classes=10,
-                 block=BasicBlock, depth=18, full_precision_first=False, full_precision_last=False):
+                 block=BasicBlock, depth=18, full_precision_first=False, full_precision_last=False, inflate = 1):
         super(ResNet_cifar10, self).__init__()
-        self.inflate = 1
+        print("Inflate:", inflate)
+        self.inflate = inflate
         self.inplanes = 16* self.inflate
         n = int((depth - 2) / 6)
         
@@ -234,8 +235,8 @@ class ResNet_cifar10(ResNet):
 
 
 def resnet_binary(**kwargs):
-    num_classes, depth, dataset, full_precision_first, full_precision_last = map(
-        kwargs.get, ['num_classes', 'depth', 'dataset', 'full_precision_first', 'full_precision_last'])
+    num_classes, depth, dataset, full_precision_first, full_precision_last, inflate= map(
+        kwargs.get, ['num_classes', 'depth', 'dataset', 'full_precision_first', 'full_precision_last', 'inflate'])
     if dataset == 'imagenet':
         num_classes = num_classes or 1000
         depth = depth or 50
@@ -263,4 +264,5 @@ def resnet_binary(**kwargs):
         return ResNet_cifar10(num_classes=num_classes,
                               block=BasicBlock, depth=depth, 
                               full_precision_first=full_precision_first,
-                              full_precision_last=full_precision_last)
+                              full_precision_last=full_precision_last,
+                              inflate=inflate)
